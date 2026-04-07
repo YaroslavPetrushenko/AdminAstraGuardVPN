@@ -477,14 +477,25 @@ async function notifyNewTickets() {
 async function start() {
     await initSchema();
 
+    // Telegram webhook
     bot.telegram.setWebhook("https://sublime-imagination-production.up.railway.app/webhook");
+
+    // Парсинг Telegram webhook (Telegram шлёт form-data!)
+    app.use(express.urlencoded({ extended: true }));
+    app.use(express.json());
+
+    // Webhook endpoint
     app.use(bot.webhookCallback("/webhook"));
 
+    // Health-check для Railway
+    app.get("/", (req, res) => res.send("OK"));
+
+    // Запуск сервера
     app.listen(process.env.PORT || 3000, () => {
         console.log("Admin bot running via webhook");
     });
 
-
+    // Фоновая задача
     setInterval(() => {
         notifyNewTickets().catch((e) =>
             console.log("notifyNewTickets error:", e.message)
@@ -492,9 +503,3 @@ async function start() {
     }, 5000);
 }
 
-bot.catch((err) => console.error("Admin bot error:", err));
-
-process.once("SIGINT", () => bot.stop("SIGINT"));
-process.once("SIGTERM", () => bot.stop("SIGTERM"));
-
-start();
