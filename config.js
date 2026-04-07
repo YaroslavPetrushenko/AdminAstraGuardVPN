@@ -1,18 +1,13 @@
 require("dotenv").config();
 
-const ADMIN_BOT_TOKEN = process.env.ADMIN_BOT_TOKEN;
-const DATABASE_URL = process.env.DATABASE_URL;
-
-// через запятую: 123,456,789
-const ADMIN_IDS = (process.env.ADMIN_IDS || "")
-  .split(",")
-  .map((x) => x.trim())
-  .filter(Boolean)
-  .map((x) => Number(x))
-  .filter((x) => !Number.isNaN(x));
-
 module.exports = {
-  ADMIN_BOT_TOKEN,
-  DATABASE_URL,
-  ADMIN_IDS,
+  ADMIN_BOT_TOKEN: process.env.ADMIN_BOT_TOKEN,
+  WEBHOOK_URL_ADMIN: process.env.WEBHOOK_URL_ADMIN,
+  PORT: process.env.PORT || 3000,
+
+  DATABASE_URL: process.env.DATABASE_URL,
+
+  ADMIN_IDS: process.env.ADMIN_IDS
+    ? process.env.ADMIN_IDS.split(",").map((id) => Number(id.trim()))
+    : [],
 };
