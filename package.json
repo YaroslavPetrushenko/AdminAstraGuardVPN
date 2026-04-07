@@ -1,0 +1,17 @@
+{
+  "name": "admin-astraguardvpn",
+  "version": "1.0.0",
+  "description": "AstraGuardVPN admin bot",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "author": "Yaroslav",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "pg": "^8.11.5",
+    "telegraf": "^4.16.3"
+  }
+}
