@@ -3,8 +3,9 @@ require("dotenv").config();
 const { Telegraf, Markup } = require("telegraf");
 const crypto = require("crypto");
 
-const { ADMIN_BOT_TOKEN, ADMIN_IDS } = require("./config");
+const { ADMIN_BOT_TOKEN, ADMIN_IDS, WEBHOOK_URL, PORT } = require("./config");
 const { initSchema, pool } = require("./db");
+
 const {
     getTicketsByStatus,
     getTicket,
@@ -16,6 +17,7 @@ const {
     getNewTicketsForNotify,
     markTicketNotified,
 } = require("./tickets");
+
 const {
     getAllPromocodes,
     createPromocode,
@@ -24,11 +26,15 @@ const {
 
 const express = require("express");
 const app = express();
+
+// Telegram шлёт JSON
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-const bot = new Telegraf(ADMIN_BOT_TOKEN);
+// Инициализация бота
+const bot = new Telegraf(ADMIN_BOT_TOKEN, { handlerTimeout: 0 });
 
-// состояние мини‑чата: adminId -> ticketId
+// состояние мини-чата: adminId -> ticketId
 const replyState = new Map();
 
 // ===============================
@@ -119,14 +125,10 @@ bot.command("open", async (ctx) => {
     if (!isAdmin(ctx.from.id)) return;
 
     const tickets = await getTicketsByStatus("open", 20);
-    if (!tickets.length) {
-        return ctx.reply("Открытых тикетов нет.");
-    }
+    if (!tickets.length) return ctx.reply("Открытых тикетов нет.");
 
     let text = "📂 Открытые тикеты:\n\n";
-    for (const t of tickets) {
-        text += formatTicketListItem(t) + "\n";
-    }
+    for (const t of tickets) text += formatTicketListItem(t) + "\n";
 
     ctx.reply(text);
 });
@@ -135,14 +137,10 @@ bot.command("closed", async (ctx) => {
     if (!isAdmin(ctx.from.id)) return;
 
     const tickets = await getTicketsByStatus("closed", 20);
-    if (!tickets.length) {
-        return ctx.reply("Закрытых тикетов нет.");
-    }
+    if (!tickets.length) return ctx.reply("Закрытых тикетов нет.");
 
-    let text = "📂 Закрытые тикеты (последние):\n\n";
-    for (const t of tickets) {
-        text += formatTicketListItem(t) + "\n";
-    }
+    let text = "📂 Закрытые тикеты:\n\n";
+    for (const t of tickets) text += formatTicketListItem(t) + "\n";
 
     ctx.reply(text);
 });
@@ -152,44 +150,33 @@ bot.command("me", async (ctx) => {
 
     const adminId = ctx.from.id;
     const tickets = await getTicketsByStatus("open", 50);
-    const mine = tickets.filter(
-        (t) => String(t.assigned_admin) === String(adminId)
-    );
+    const mine = tickets.filter((t) => String(t.assigned_admin) === String(adminId));
 
-    if (!mine.length) {
-        return ctx.reply("У тебя нет тикетов в работе.");
-    }
+    if (!mine.length) return ctx.reply("У тебя нет тикетов в работе.");
 
     let text = "📂 Твои тикеты:\n\n";
-    for (const t of mine) {
-        text += formatTicketListItem(t) + "\n";
-    }
+    for (const t of mine) text += formatTicketListItem(t) + "\n";
 
     ctx.reply(text);
 });
 
 // ===============================
-// Открытие тикета по ID
+// Открытие тикета
 // ===============================
 bot.command("ticket", async (ctx) => {
     if (!isAdmin(ctx.from.id)) return;
 
     const parts = ctx.message.text.trim().split(/\s+/);
-    if (parts.length < 2) {
-        return ctx.reply("Использование: /ticket T-1234");
-    }
+    if (parts.length < 2) return ctx.reply("Использование: /ticket T-1234");
 
-    const ticketId = parts[1];
-    await showTicket(ctx, ticketId);
+    await showTicket(ctx, parts[1]);
 });
 
 async function showTicket(ctx, ticketId) {
     const adminId = ctx.from.id;
 
     const ticket = await getTicket(ticketId);
-    if (!ticket) {
-        return ctx.reply(`Тикет ${ticketId} не найден.`);
-    }
+    if (!ticket) return ctx.reply(`Тикет ${ticketId} не найден.`);
 
     const messages = await getTicketMessages(ticketId);
     const text = formatMessages(ticketId, messages);
@@ -204,8 +191,7 @@ async function showTicket(ctx, ticketId) {
                 `Вы не можете отвечать.`;
         }
     } else {
-        ownerLabel =
-            "Тикет свободен. Нажми «Ответить», чтобы взять его в работу.";
+        ownerLabel = "Тикет свободен. Нажми «Ответить», чтобы взять его в работу.";
     }
 
     const isOwner =
@@ -215,40 +201,31 @@ async function showTicket(ctx, ticketId) {
 }
 
 // ===============================
-// Inline‑кнопки тикета
+// Inline кнопки
 // ===============================
 bot.action(/ticket_refresh_(.+)/, async (ctx) => {
     if (!isAdmin(ctx.from.id)) return;
-    const ticketId = ctx.match[1];
     await ctx.answerCbQuery();
-    await showTicket(ctx, ticketId);
+    await showTicket(ctx, ctx.match[1]);
 });
 
 bot.action(/ticket_reply_(.+)/, async (ctx) => {
     if (!isAdmin(ctx.from.id)) return;
+
     const adminId = ctx.from.id;
     const ticketId = ctx.match[1];
 
     const ticket = await getTicket(ticketId);
-    if (!ticket) {
-        await ctx.answerCbQuery("Тикет не найден.");
-        return;
-    }
+    if (!ticket) return ctx.answerCbQuery("Тикет не найден.");
 
     if (ticket.assigned_admin && String(ticket.assigned_admin) !== String(adminId)) {
         await ctx.answerCbQuery("Тикет занят другим админом.");
-        await ctx.reply(
+        return ctx.reply(
             `⚠️ Тикет уже ведёт админ: ${ticket.assigned_admin}\nВы не можете отвечать.`
         );
-        return;
     }
 
-    const assigned = await assignTicket(ticketId, adminId);
-    if (!assigned) {
-        await ctx.answerCbQuery("Не удалось взять тикет.");
-        return;
-    }
-
+    await assignTicket(ticketId, adminId);
     replyState.set(adminId, ticketId);
 
     await ctx.answerCbQuery();
@@ -257,14 +234,12 @@ bot.action(/ticket_reply_(.+)/, async (ctx) => {
 
 bot.action(/ticket_free_(.+)/, async (ctx) => {
     if (!isAdmin(ctx.from.id)) return;
+
     const adminId = ctx.from.id;
     const ticketId = ctx.match[1];
 
     const freed = await freeTicket(ticketId, adminId);
-    if (!freed) {
-        await ctx.answerCbQuery("Тикет не принадлежит тебе или уже свободен.");
-        return;
-    }
+    if (!freed) return ctx.answerCbQuery("Тикет не принадлежит тебе.");
 
     replyState.delete(adminId);
 
@@ -272,47 +247,29 @@ bot.action(/ticket_free_(.+)/, async (ctx) => {
     await ctx.reply(`Тикет ${ticketId} освобождён.`);
 
     for (const id of ADMIN_IDS) {
-        try {
-            await bot.telegram.sendMessage(id, `🔔 Тикет ${ticketId} снова свободен.`);
-        } catch (e) {
-            console.log("Notify admin error:", e.message);
-        }
+        bot.telegram.sendMessage(id, `🔔 Тикет ${ticketId} снова свободен.`).catch(() => {});
     }
 });
 
 bot.action(/ticket_close_(.+)/, async (ctx) => {
     if (!isAdmin(ctx.from.id)) return;
+
     const adminId = ctx.from.id;
     const ticketId = ctx.match[1];
 
-    const ticket = await getTicket(ticketId);
-    if (!ticket) {
-        await ctx.answerCbQuery("Тикет не найден.");
-        return;
-    }
-
-    const closed = await closeTicket(ticketId);
-    if (!closed) {
-        await ctx.answerCbQuery("Не удалось закрыть тикет.");
-        return;
-    }
-
+    await closeTicket(ticketId);
     replyState.delete(adminId);
 
     await ctx.answerCbQuery("Тикет закрыт.");
-    await ctx.reply(`Тикет ${ticketId} закрыт и удалён.`);
+    await ctx.reply(`Тикет ${ticketId} закрыт.`);
 
     for (const id of ADMIN_IDS) {
-        try {
-            await bot.telegram.sendMessage(id, `✅ Тикет ${ticketId} закрыт.`);
-        } catch (e) {
-            console.log("Notify admin error:", e.message);
-        }
+        bot.telegram.sendMessage(id, `✅ Тикет ${ticketId} закрыт.`).catch(() => {});
     }
 });
 
 // ===============================
-// Мини‑чат: ответы админа
+// Мини‑чат
 // ===============================
 bot.on("text", async (ctx) => {
     if (!isAdmin(ctx.from.id)) return;
@@ -327,18 +284,10 @@ bot.on("text", async (ctx) => {
     const ticket = await getTicket(ticketId);
     if (!ticket) {
         replyState.delete(adminId);
-        return ctx.reply(`Тикет ${ticketId} не найден, режим ответа сброшен.`);
-    }
-
-    if (ticket.assigned_admin && String(ticket.assigned_admin) !== String(adminId)) {
-        replyState.delete(adminId);
-        return ctx.reply(
-            `⚠️ Тикет уже ведёт админ: ${ticket.assigned_admin}\nВы не можете отвечать.`
-        );
+        return ctx.reply(`Тикет ${ticketId} не найден.`);
     }
 
     await addAdminMessage(ticketId, adminId, text);
-
     await ctx.reply(`Сообщение отправлено в тикет ${ticketId}.`);
 });
 
@@ -349,9 +298,7 @@ bot.command("promos", async (ctx) => {
     if (!isAdmin(ctx.from.id)) return;
 
     const promos = await getAllPromocodes();
-    if (!promos.length) {
-        return ctx.reply("Промокодов нет.");
-    }
+    if (!promos.length) return ctx.reply("Промокодов нет.");
 
     let text = "🎟 Все промокоды:\n\n";
     for (const p of promos) {
@@ -369,26 +316,15 @@ bot.command("addpromo", async (ctx) => {
 
     const args = ctx.message.text.trim().split(/\s+/).slice(1);
     if (args.length < 3) {
-        return ctx.reply(
-            "Использование:\n/addpromo CODE DISCOUNT USES\nНапример:\n/addpromo START10 10 100"
-        );
+        return ctx.reply("Использование:\n/addpromo CODE DISCOUNT USES");
     }
 
-    const code = String(args[0]).toUpperCase();
+    const code = args[0].toUpperCase();
     const discount = Number(args[1]);
     const usesLeft = Number(args[2]);
 
-    if (!discount || discount <= 0 || discount > 100) {
-        return ctx.reply("Скидка должна быть от 1 до 100.");
-    }
-    if (!Number.isInteger(usesLeft) || usesLeft <= 0) {
-        return ctx.reply("Количество использований должно быть положительным целым.");
-    }
-
     const created = await createPromocode(code, discount, usesLeft);
-    if (!created) {
-        return ctx.reply("Промокод с таким кодом уже существует.");
-    }
+    if (!created) return ctx.reply("Промокод уже существует.");
 
     ctx.reply(
         `✅ Промокод создан:\nКод: ${created.code}\nСкидка: ${created.discount}%\nИспользований: ${created.uses_left}`
@@ -399,50 +335,13 @@ bot.command("delpromo", async (ctx) => {
     if (!isAdmin(ctx.from.id)) return;
 
     const args = ctx.message.text.trim().split(/\s+/).slice(1);
-    if (!args.length) {
-        return ctx.reply("Использование: /delpromo CODE");
-    }
+    if (!args.length) return ctx.reply("Использование: /delpromo CODE");
 
-    const code = String(args[0]).toUpperCase();
+    const code = args[0].toUpperCase();
     const deleted = await deletePromocode(code);
-    if (!deleted) {
-        return ctx.reply("Такого промокода нет.");
-    }
+    if (!deleted) return ctx.reply("Такого промокода нет.");
 
     ctx.reply(`🗑 Промокод ${code} удалён.`);
-});
-
-// ===============================
-// /vpnkey [days] [devices] [traffic]
-// ===============================
-bot.command("vpnkey", async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-
-    const args = ctx.message.text.trim().split(/\s+/).slice(1);
-
-    const days = Number(args[0] || 30);
-    const devices = Number(args[1] || 1);
-    const traffic = args[2] || "unlimited";
-
-    if (!Number.isFinite(days) || days <= 0) {
-        return ctx.reply("Неверное количество дней.");
-    }
-    if (!Number.isFinite(devices) || devices <= 0) {
-        return ctx.reply("Неверное количество устройств.");
-    }
-
-    const key = "AG-" + crypto.randomBytes(16).toString("hex");
-    const expiresAt = new Date(Date.now() + days * 86400000);
-
-    let text =
-        `🔑 *VPN‑ключ создан*\n\n` +
-        `Ключ: \`${key}\`\n` +
-        `Срок: ${days} дней (до ${expiresAt.toLocaleString("ru-RU")})\n` +
-        `Устройств: ${devices}\n` +
-        `Трафик: ${traffic === "unlimited" ? "без ограничений" : String(traffic)
-        }`;
-
-    await ctx.reply(text, { parse_mode: "Markdown" });
 });
 
 // ===============================
@@ -460,11 +359,7 @@ async function notifyNewTickets() {
             `Открой: /ticket ${t.ticket_id}`;
 
         for (const id of ADMIN_IDS) {
-            try {
-                await bot.telegram.sendMessage(id, msg);
-            } catch (e) {
-                console.log("Notify admin error:", e.message);
-            }
+            bot.telegram.sendMessage(id, msg).catch(() => {});
         }
 
         await markTicketNotified(t.ticket_id);
@@ -477,25 +372,21 @@ async function notifyNewTickets() {
 async function start() {
     await initSchema();
 
-    // Telegram webhook
-    bot.telegram.setWebhook("https://sublime-imagination-production.up.railway.app/webhook");
-
-    // Парсинг Telegram webhook (Telegram шлёт form-data!)
-    app.use(express.urlencoded({ extended: true }));
-    app.use(express.json());
+    // Webhook
+    bot.telegram.setWebhook(WEBHOOK_URL);
 
     // Webhook endpoint
     app.use(bot.webhookCallback("/webhook"));
 
-    // Health-check для Railway
+    // Health-check
     app.get("/", (req, res) => res.send("OK"));
 
-    // Запуск сервера
-    app.listen(process.env.PORT || 3000, () => {
+    // Start server
+    app.listen(PORT, () => {
         console.log("Admin bot running via webhook");
     });
 
-    // Фоновая задача
+    // Background tasks
     setInterval(() => {
         notifyNewTickets().catch((e) =>
             console.log("notifyNewTickets error:", e.message)
@@ -503,3 +394,4 @@ async function start() {
     }, 5000);
 }
 
+start();
